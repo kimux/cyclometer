@@ -425,7 +425,15 @@ class GpiozeroSource:
 
 
 class SimulatedSource:
-    """Synthetic pulses so the program runs with no hardware at all."""
+    """Synthetic pulses so the program runs with no hardware at all.
+
+    Distance is integrated in small steps and a pulse is emitted every
+    time the wheel has covered one arc. Predicting the next pulse from
+    the speed at the previous one looks simpler, but breaks during a
+    launch: at 0.1 m/s it schedules the next pulse four seconds ahead,
+    by which time the bike is doing 4 m/s, so the whole acceleration is
+    skipped and the model sees a standstill followed by a jump.
+    """
 
     name = "simulated"
 
@@ -433,13 +441,15 @@ class SimulatedSource:
     # so the LOW pulse is (detection window) / (magnet tip speed).
     DETECT_MM = 4.0      # width of the region where the sensor trips
     MAGNET_RADIUS_M = 0.20
+    STEP_NS = 5_000_000  # integration step, 5 ms
 
     def __init__(self, chip: str, pin: int, magnets: int = MAGNETS,
                  circumference_m: float = CIRCUMFERENCE_M) -> None:
         self._circ = circumference_m
         self._arc = circumference_m / magnets
-        self._t0 = time.monotonic()
-        self._next = time.monotonic_ns()
+        self._t0_ns = time.monotonic_ns()
+        self._last_ns = self._t0_ns
+        self._dist = 0.0        # distance since the last pulse
 
     def _width_ns(self, v_mps: float) -> int:
         """Pulse width at rim speed v."""
@@ -449,32 +459,45 @@ class SimulatedSource:
             return 10 ** 6
         return int(self.DETECT_MM / 1000.0 / tip_mps * 1e9)
 
-    def _speed_mps(self) -> float:
-        """Repeating profile: launch, cruise, slow down, stop."""
-        t = (time.monotonic() - self._t0) % 40.0
+    def _speed_mps(self, t: float) -> float:
+        """Repeating profile: launch, cruise, slow down, stop.
+
+        The cruise amplitude grows so that each swing sets a new peak,
+        which is what exercises the peak marker on the dial.
+        """
+        t = t % 25.0
         if t < 6:
             v = 6.5 * (t / 6) ** 1.6
-        elif t < 28:
-            v = 6.5 + 0.6 * math.sin(t * 1.3)
-        elif t < 34:
-            v = max(0.0, 6.5 * (34 - t) / 6)
+        elif t < 15:
+            grow = 0.5 + (2.0 - 0.5) / (15 - 6) * (t - 6)
+            v = 6.5 + 0.6 * math.sin(t * 1.5) * grow
+        elif t < 21:
+            v = max(0.0, 6.5 * (21 - t) / 6)
         else:
             v = 0.0
-        return v + random.uniform(-0.05, 0.05)
+        return max(0.0, v + random.uniform(-0.05, 0.05))
 
     def poll(self, timeout_s: float):
         time.sleep(timeout_s)
-        out = []
         now = time.monotonic_ns()
-        while self._next <= now:
-            v = self._speed_mps()
-            if v < 0.05:
-                self._next = now + 10 ** 9
-                break
-            w = self._width_ns(v)
-            out.append((self._next, 0))          # falling: magnet arrives
-            out.append((self._next + w, 1))      # rising: magnet leaves
-            self._next += int(self._arc / v * 1e9)
+        out = []
+        t = self._last_ns
+        while t < now:
+            nxt = min(t + self.STEP_NS, now)
+            dt = (nxt - t) / 1e9
+            v = self._speed_mps((t - self._t0_ns) / 1e9)
+            d = v * dt
+            while d > 0 and self._dist + d >= self._arc:
+                need = self._arc - self._dist
+                at = int(t + (nxt - t) * (need / d))
+                w = self._width_ns(max(v, 0.02))
+                out.append((at, 0))              # falling: magnet arrives
+                out.append((at + w, 1))          # rising: magnet leaves
+                d -= need
+                self._dist = 0.0
+            self._dist += d
+            t = nxt
+        self._last_ns = now
         return out
 
     def close(self) -> None:
