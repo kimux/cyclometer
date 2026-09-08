@@ -368,17 +368,23 @@ def main() -> int:
     ap.add_argument("--clock", choices=("auto", "on", "off"), default="auto",
                     help="auto shows the clock only when NTP has set the "
                          "time; use on to preview it on a Mac")
+    ap.add_argument("--record", type=float, default=None, metavar="SECONDS",
+                    help="render this many seconds of the simulation to "
+                         "PNG frames in ./frames, then exit")
+    ap.add_argument("--fps", type=int, default=20,
+                    help="frame rate for --record (default 20)")
     ap.add_argument("--shot", type=str, default=None,
                     help="render one frame at this speed:km and exit, "
                          "e.g. --shot 27.3:123.45")
     args = ap.parse_args()
 
-    if args.shot:
+    if args.shot or args.record:
         os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
     pygame.init()
     pygame.mouse.set_visible(False)
-    flags = 0 if (args.windowed or args.shot) else pygame.FULLSCREEN
+    flags = (0 if (args.windowed or args.shot or args.record)
+             else pygame.FULLSCREEN)
     screen = pygame.display.set_mode((W, H), flags)
     pygame.display.set_caption("CYCLOMETER")
 
@@ -415,6 +421,45 @@ def main() -> int:
         odo.draw(screen, km)
         pygame.display.flip()
         pygame.image.save(screen, "/tmp/gauge.png")
+        return 0
+
+    if args.record:
+        import random as _random
+        _random.seed(0)                    # same demo every time
+        out_dir = "frames"
+        os.makedirs(out_dir, exist_ok=True)
+        sim = cc.SimulatedSource("", args.pin, args.magnets,
+                                 args.circumference)
+        sim._t0_ns = 0
+        sim._last_ns = 0
+        model = cc.RideModel(circumference_m=args.circumference,
+                             magnets=args.magnets)
+        shown = peak = 0.0
+        pending = None
+        n = int(args.record * args.fps)
+        for i in range(n):
+            now = int(i / args.fps * 1e9)
+            for t_ns, level in sim.advance(now):
+                model.set_level(level)
+                if level == 0:
+                    pending = t_ns if model.on_pulse(t_ns) else None
+                elif pending is not None:
+                    model.state.width_s = (t_ns - pending) / 1e9
+                    pending = None
+            st = model.tick(now)
+            shown += (st.speed_kf_kmh - shown) * 0.30
+            peak = max(peak, shown)
+            screen.blit(face, (0, 0))
+            if synced:
+                clock.draw(screen)
+            if st.fault:
+                fault_banner.draw(screen, st.fault)
+            if peak >= PEAK_MIN:
+                draw_peak(screen, peak)
+            draw_needle(screen, angle_for(shown))
+            odo.draw(screen, st.distance_m / 1000.0)
+            pygame.image.save(screen, f"{out_dir}/{i:04d}.png")
+        print(f"{n} frames written to {out_dir}/ at {args.fps} fps")
         return 0
 
     kind = ("simulate" if args.simulate

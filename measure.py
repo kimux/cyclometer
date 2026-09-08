@@ -479,7 +479,14 @@ class SimulatedSource:
 
     def poll(self, timeout_s: float):
         time.sleep(timeout_s)
-        now = time.monotonic_ns()
+        return self.advance(time.monotonic_ns())
+
+    def advance(self, now: int):
+        """Integrate up to `now` and return the pulses in between.
+
+        Split out from poll() so a recorder can drive it from a virtual
+        clock and get exactly the same pulse train every run.
+        """
         out = []
         t = self._last_ns
         while t < now:
