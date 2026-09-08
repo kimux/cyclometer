@@ -7,6 +7,10 @@ Panasonic EZ（2025年型 電動アシスト自転車）のために作った、
 パルス間隔から速度・距離・加速度を求めます。
 
 <p align="center">
+  <img src="pict/demo-360.gif" width="360" alt="Simulated ride">
+</p>
+
+<p align="center">
   <img src="pict/cyclometer01.jpg" width="460" alt="ハンドルに装着したメーター">
 </p>
 

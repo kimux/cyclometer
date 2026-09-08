@@ -9,6 +9,10 @@ children's bicycles in the 1970s, using a Raspberry Pi Zero 2 WH and a
 intervals between pulses give speed, distance and acceleration.
 
 <p align="center">
+  <img src="pict/demo-360.gif" width="360" alt="Simulated ride">
+</p>
+
+<p align="center">
   <img src="pict/cyclometer01.jpg" width="460" alt="Mounted on the handlebar">
 </p>
 
