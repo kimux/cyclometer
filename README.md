@@ -10,6 +10,7 @@ intervals between pulses give speed, distance and acceleration.
 
 <p align="center">
   <img src="pict/demo-360.gif" width="360" alt="Simulated ride">
+  <img src="pict/demo-spinner.gif" width="360" alt="Simulated ride (Spinner)">
 </p>
 
 <p align="center">
