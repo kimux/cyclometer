@@ -8,6 +8,7 @@ Panasonic EZ（2025年型 電動アシスト自転車）のために作った、
 
 <p align="center">
   <img src="pict/demo-360.gif" width="360" alt="Simulated ride">
+  <img src="pict/demo-spinner.gif" width="360" alt="Simulated ride (Spinner)">
 </p>
 
 <p align="center">
