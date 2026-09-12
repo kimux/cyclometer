@@ -40,10 +40,10 @@ MICHROMA = "Michroma-Regular.ttf"
 
 W, H = 480, 320
 
-STRIP_H = 44                 # 16-segment readout across the top
-STRIP_CELLS = 16             # cells in the tube
-GUTTER = 7                   # black gap between panels
-MARGIN_X, MARGIN_B = 6, 4
+STRIP_H = 54                 # 16-segment readout across the top
+STRIP_CELLS = 15             # cells in the tube
+GUTTER = 4                   # black gap between panels
+MARGIN_X, MARGIN_B = 0, 0
 
 COLS, ROWS = 3, 2
 GRID_X = MARGIN_X
@@ -54,14 +54,15 @@ PANEL_W = (GRID_W - GUTTER * (COLS - 1)) // COLS
 PANEL_H = (GRID_H - GUTTER * (ROWS - 1)) // ROWS
 
 VP_X = GRID_X + GRID_W // 2  # vanishing point
-VP_Y = GRID_Y + GRID_H // 2
+VP_Y = GRID_Y + GRID_H // 2 - 12
 
 BG        = (2, 3, 6)
+STRIP_BG  = (6, 6, 9)
 PANEL     = (26, 52, 122)    # the blue of the CRT
 PANEL_EDGE = (8, 14, 34)
 SCAN      = (0, 0, 0, 46)    # scanline overlay
 MAGENTA   = (236, 84, 190)
-MAGENTA_D = (150, 46, 122)
+MAGENTA_D = MAGENTA #  MAGENTA_D = (150, 46, 122)
 
 # The speed plate takes the colour of the band it is in, matching the
 # dial skin: green while the motor assists, amber past the cut-off,
@@ -98,21 +99,27 @@ RING_SKIP = 2            # deepest ones not drawn: the far end reads
                          # better empty than crowded with tiny boxes
 RING_MIN, RING_MAX = 0.10, 2.8    # scale at birth and at the far edge
 RING_W, RING_H = GRID_W * 0.92, GRID_H * 0.62
-RING_SPACING_M = 4.0     # metres of travel between one ring and the next
+# Both the corridor and the city are driven by distance travelled,
+# not by speed: feed them metres and stopping stops the flow, while
+# acceleration shows up on its own. These two set how far a metre of
+# real riding goes on screen.
+RING_SPACING_M = 4.0     # metres of travel per ring. Smaller = faster
 
 # Skyscrapers, as a proper perspective projection rather than boxes
 # that merely grow. Windows sit on vertical walls either side; the
 # depth of each is reduced by the distance travelled and wrapped at
 # Z_PERIOD, which is what makes the city endless without storing one.
-FOCAL = 250.0            # pixels; sets how fast things widen out
-Z_NEAR = 2.2             # closer than this and a window is behind us
+FOCAL = 180.0            # pixels; sets how fast things widen out
+Z_NEAR =  6.0             # closer than this and a window is behind us
 Z_PERIOD = 46.0          # metres before the pattern repeats
-Z_FAR = 30.0             # beyond this a window is not drawn
+Z_FAR = 22.0             # beyond this a window is not drawn
 CENTRE_CLEAR = 15        # px around the vanishing point kept empty
-WIN_W, WIN_H = 0.34, 0.52   # window size in metres
-WIN_MAX_W, WIN_MAX_H = 5, 8  # px, so a close one does not fill the panel
-WALL_MIN, WALL_MAX = 4.0, 9.5    # metres from the flight path
-BUILDINGS = 22
+# WIN_W, WIN_H = 0.34, 0.52   # window size in metres
+WIN_W, WIN_H = 0.40, 1.00   # window size in metres
+WIN_MAX_W, WIN_MAX_H = 99, 99  # px, so a close one does not fill the panel
+WALL_MIN, WALL_MAX = 5.0, 20.0    # metres from the flight path
+SKY_GAIN = 0.3           # >1 flies through the city faster than reality
+BUILDINGS = 18
 
 
 def ring_scale(u: float) -> float:
@@ -173,6 +180,7 @@ class Skyline:
         rnd = random.Random(seed)
         self.travel = 0.0
         self.windows = []    # (x, y, z)
+        self._sprites = None
         for b in range(BUILDINGS):
             side = -1 if b % 2 == 0 else 1
             wx = side * rnd.uniform(WALL_MIN, WALL_MAX)
@@ -192,39 +200,54 @@ class Skyline:
     def advance(self, metres: float) -> None:
         self.travel += metres
 
-    def _z(self, z0: float) -> float:
-        return (z0 - self.travel) % Z_PERIOD + Z_NEAR
+    def _build_sprites(self):
+        """One ready-made surface per window size and brightness.
 
-    def _project(self, x, y, z):
-        return VP_X + FOCAL * x / z, VP_Y + FOCAL * y / z
-
-    def draw(self, dst) -> None:
-        # Only the windows: the building corners drew as full-height
-        # verticals that read as a fence across the panels rather than
-        # as structure, and the lit windows carry the shape anyway.
-        top_y, bot_y = GRID_Y, GRID_Y + GRID_H
-        for x, y, z0 in self.windows:
-            z = self._z(z0)
-            if z > Z_FAR:
-                continue
-            sx, sy = self._project(x, y, z)
-            # Everything far enough away lands on the vanishing point,
-            # which turns into a speckle of noise over the corridor.
-            # Keeping a hole there puts the city where it belongs:
-            # out to either side, the way you would see it go past.
-            if abs(sx - VP_X) < CENTRE_CLEAR:
-                continue
-            if not (GRID_X - 6 < sx < GRID_X + GRID_W + 6):
-                continue
-            if not (top_y < sy < bot_y):
-                continue
-            # Sized by perspective rather than in steps, and taller
-            # than wide: a square pixel reads as a star, a small
-            # upright rectangle reads as a lit window.
+        The inner loop runs over hundreds of windows every frame, and
+        on a Zero 2 W each Python-level draw call costs more than the
+        pixels it writes. Pre-rendering the handful of distinct sizes
+        lets the whole set go out through one blits() call instead.
+        """
+        self._size_tab = []
+        for zi in range(0, int(Z_FAR) + 3):
+            z = max(zi, 1)
             w = min(WIN_MAX_W, max(2, int(FOCAL * WIN_W / z)))
             h = min(WIN_MAX_H, max(2, int(FOCAL * WIN_H / z)))
-            col = CYAN_D if z > 20.0 else CYAN
-            pygame.draw.rect(dst, col, (int(sx), int(sy), w, h))
+            self._size_tab.append((w, h))
+        self._sprites = {}
+        for w, h in set(self._size_tab):
+            for near, col in ((0, CYAN_D), (1, CYAN)):
+                surf = pygame.Surface((w, h))
+                surf.fill(col)
+                self._sprites[(w, h, near)] = surf
+
+    def draw(self, dst) -> None:
+        if self._sprites is None:
+            self._build_sprites()
+        # Everything the loop needs is pulled into locals first: at a
+        # few hundred iterations a frame, attribute and global lookups
+        # are a measurable share of the cost on this hardware.
+        top_y, bot_y = GRID_Y, GRID_Y + GRID_H
+        left, right = GRID_X - 6, GRID_X + GRID_W + 6
+        travel, zp, zn, zf = self.travel, Z_PERIOD, Z_NEAR, Z_FAR
+        f, vx, vy = FOCAL, VP_X, VP_Y
+        clear = CENTRE_CLEAR
+        tab, spr = self._size_tab, self._sprites
+        seq = []
+        ap = seq.append
+        for x, y, z0 in self.windows:
+            z = (z0 - travel) % zp + zn
+            if z > zf:
+                continue
+            sx = vx + f * x / z
+            if sx < left or sx > right or -clear < sx - vx < clear:
+                continue
+            sy = vy + f * y / z
+            if sy <= top_y or sy >= bot_y:
+                continue
+            w, h = tab[int(z)]
+            ap((spr[(w, h, 1 if z <= 20.0 else 0)], (sx, sy)))
+        dst.blits(seq, doreturn=False)
 
 
 class Corridor:
@@ -323,9 +346,13 @@ class SegDisplay:
     PITCH = 29               # cell to cell
     SS = 3                   # supersampling; see render()
 
-    def __init__(self, lit, unlit=None) -> None:
+    def __init__(self, lit, unlit=None, bg=None) -> None:
         self.lit = lit
         self.unlit = unlit
+        # Baking the strip's background into each glyph makes the blit
+        # an opaque copy instead of a per-pixel alpha composite, which
+        # is several times cheaper on hardware without NEON.
+        self.bg = bg
         self._cache: dict[tuple[str, bool], pygame.Surface] = {}
         self._geom = self._build()
 
@@ -430,7 +457,11 @@ class SegDisplay:
         # stroking an anti-aliased outline over the same polygon blends
         # the edge twice and leaves it looking chewed; supersampling
         # avoids that and hides the rounding of vertices to whole pixels.
-        big = pygame.Surface((w * k, h * k), pygame.SRCALPHA)
+        if self.bg is None:
+            big = pygame.Surface((w * k, h * k), pygame.SRCALPHA)
+        else:
+            big = pygame.Surface((w * k, h * k))
+            big.fill(self.bg)
         dcol = self.lit if dp else self.unlit
         if dcol is not None:
             dpx = self.span + self.DP_GAP + self.DP_R
@@ -452,13 +483,19 @@ class SegDisplay:
                 pygame.draw.polygon(
                     big, col, [(x * k, (y + 3) * k) for x, y in poly])
         surf = pygame.transform.smoothscale(big, (w, h))
+        if self.bg is not None:
+            surf = surf.convert()
         self._cache[key] = surf
         return surf
 
     def render(self, text: str) -> pygame.Surface:
         cells = self.to_cells(text)
         w, h = self.PITCH * len(cells) + 6, self.CH + 6
-        surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        if self.bg is None:
+            surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        else:
+            surf = pygame.Surface((w, h))
+            surf.fill(self.bg)
         for idx, (ch, dp) in enumerate(cells):
             surf.blit(self._glyph(ch, dp), (idx * self.PITCH, 0))
         return surf
@@ -489,19 +526,42 @@ def build_background() -> pygame.Surface:
             y = GRID_Y + r * (PANEL_H + GUTTER)
             pygame.draw.rect(s, PANEL, (x, y, PANEL_W, PANEL_H))
             pygame.draw.rect(s, PANEL_EDGE, (x, y, PANEL_W, PANEL_H), 1)
+    # Scanlines are baked into the panels rather than laid over the
+    # finished frame: an overlay would mean a full-screen alpha blit
+    # every frame, which this hardware cannot afford. The corridor and
+    # the windows are no longer scanned, but the CRT texture reads
+    # from the background well enough.
+    scan = pygame.Surface((W, H), pygame.SRCALPHA)
+    for y in range(GRID_Y, GRID_Y + GRID_H, 2):
+        pygame.draw.line(scan, SCAN, (0, y), (W, y))
+    s.blit(scan, (0, 0))
     return s
 
 
-def panel_mask() -> pygame.Surface:
-    """Black over everything that is not a panel, so the corridor is
-    clipped to the six windows instead of bleeding into the gutters."""
+def gutter_rects() -> list:
+    """The strips of black that separate the six panels.
+
+    This used to be a full-screen surface with per-pixel alpha blitted
+    over the finished frame. On a Zero 2 W that one blit cost 47 ms --
+    two thirds of the entire drawing budget -- because there is no
+    NEON in this pygame build. Filling half a dozen opaque rectangles
+    does the same job for almost nothing.
+    """
+    rects = [(0, GRID_Y, GRID_X, GRID_H),
+             (GRID_X + GRID_W, GRID_Y, W - GRID_X - GRID_W, GRID_H),
+             (0, GRID_Y + GRID_H, W, H - GRID_Y - GRID_H)]
+    for c in range(1, COLS):
+        rects.append((GRID_X + c * (PANEL_W + GUTTER) - GUTTER, GRID_Y,
+                      GUTTER, GRID_H))
+    for r in range(1, ROWS):
+        rects.append((GRID_X, GRID_Y + r * (PANEL_H + GUTTER) - GUTTER,
+                      GRID_W, GUTTER))
+    return rects
+
+
+def _unused_panel_mask() -> pygame.Surface:
     m = pygame.Surface((W, H), pygame.SRCALPHA)
     m.fill(BG)
-    for r in range(ROWS):
-        for c in range(COLS):
-            x = GRID_X + c * (PANEL_W + GUTTER)
-            y = GRID_Y + r * (PANEL_H + GUTTER)
-            pygame.draw.rect(m, (0, 0, 0, 0), (x, y, PANEL_W, PANEL_H))
     return m
 
 
@@ -510,46 +570,54 @@ def panel_mask() -> pygame.Surface:
 BIG_PAD = 7              # padding inside the plate behind the big number
 
 
+_SPEED_PLATES: dict = {}
+
+
 def draw_big_speed(screen, font, unit_font, kmh: float) -> None:
     """The speed as a whole number, bottom right, over everything.
 
-    Drawn last so the mask and the scanlines do not touch it, and on a
-    dark plate because the corridor sweeps through that corner and a
-    bare glyph would disappear against a magenta ring.
+    There are only a hundred possible plates, so each is composed once
+    and kept. Per frame this is a single opaque blit; building it live
+    meant a new alpha surface and two text renders every time, which
+    this hardware notices.
     """
-    col = speed_band(kmh)
-    num = font.render(f"{min(99, int(round(kmh))):d}", True, BAND_INK)
-    unit = unit_font.render("km/h", True, BAND_INK)
-    gap = 5
-    # The slot is always two digits wide, so the plate does not change
-    # size when the speed crosses ten, and the units digit stays put.
-    num_w = font.size("88")[0]
-    cw = num_w + gap + unit.get_width()
-    ch = num.get_height()
-    plate = pygame.Rect(0, 0, cw + BIG_PAD * 2, ch + BIG_PAD * 2)
-    plate.bottomright = (GRID_X + GRID_W - 6, GRID_Y + GRID_H - 6)
-    shade = pygame.Surface(plate.size, pygame.SRCALPHA)
-    shade.fill((*col, 232))
-    screen.blit(shade, plate)
-    pygame.draw.rect(screen, [int(c * 0.55) for c in col], plate, 2)
-    nx = plate.x + BIG_PAD
-    ny = plate.y + BIG_PAD
-    screen.blit(num, (nx + num_w - num.get_width(), ny))
-    # the unit sits on the number's baseline, so it reads as one label
-    screen.blit(unit, (nx + num_w + gap,
-                       ny + ch - unit.get_height() - 6))
+    v = min(99, int(round(kmh)))
+    plate = _SPEED_PLATES.get(v)
+    if plate is None:
+        col = speed_band(v)
+        num = font.render(f"{v:d}", True, BAND_INK)
+        unit = unit_font.render("", True, BAND_INK)
+        gap = 5
+        # The slot is always two digits wide, so the plate does not
+        # change size when the speed crosses ten, and the units digit
+        # stays put.
+        num_w = font.size("88")[0]
+        cw = num_w + gap + unit.get_width()
+        ch = num.get_height()
+        plate = pygame.Surface((cw + BIG_PAD * 2, ch + BIG_PAD * 2))
+        plate.fill(col)
+        pygame.draw.rect(plate, [int(c * 0.55) for c in col],
+                         plate.get_rect(), 2)
+        plate.blit(num, (BIG_PAD + num_w - num.get_width(), BIG_PAD))
+        plate.blit(unit, (BIG_PAD + num_w + gap,
+                          BIG_PAD + ch - unit.get_height() - 6))
+        plate = plate.convert()
+        _SPEED_PLATES[v] = plate
+    r = plate.get_rect()
+    r.bottomright = (GRID_X + GRID_W - 6, GRID_Y + GRID_H - 6)
+    screen.blit(plate, r)
 
 
-def draw_frame(screen, bg, mask, scanlay, dm, big_font, unit_font,
+def draw_frame(screen, bg, mask, dm, big_font, unit_font,
                corridor, sky, st, shown, peak):
     screen.blit(bg, (0, 0))
     sky.draw(screen)
     corridor.draw(screen)
-    screen.blit(mask, (0, 0))       # clip the corridor to the panels
-    screen.blit(scanlay, (0, 0))    # scanlines over the graphics too
+    for r in mask:                  # clip the content to the panels
+        screen.fill(BG, r)
 
     # top strip
-    pygame.draw.rect(screen, (6, 6, 9), (0, 0, W, STRIP_H))
+    screen.fill(STRIP_BG, (0, 0, W, STRIP_H))
     pygame.draw.line(screen, (30, 22, 8), (0, STRIP_H - 1), (W, STRIP_H - 1))
     mid = STRIP_H // 2
     # The tube carries distance and time only; the speed lives in the
@@ -569,8 +637,26 @@ def main() -> int:
     ap.add_argument("--circumference", type=float, default=cc.CIRCUMFERENCE_M)
     ap.add_argument("--magnets", type=int, default=cc.MAGNETS)
     ap.add_argument("--windowed", action="store_true")
+    ap.add_argument("--exit-after", type=float, default=None,
+                    metavar="SECONDS",
+                    help="quit on its own after this long. Worth setting "
+                         "for a demo launched from the desktop, where a "
+                         "full-screen window with no keyboard attached "
+                         "leaves nothing to close it with.")
     ap.add_argument("--record", type=float, default=None, metavar="SECONDS")
-    ap.add_argument("--fps", type=int, default=20)
+    ap.add_argument("--fps", type=int, default=20,
+                    help="frame rate, for the live display and --record "
+                         "alike (default 20)")
+    ap.add_argument("--profile-stages", action="store_true",
+                    help="time each drawing stage separately and exit. "
+                         "Where the frame budget goes differs between "
+                         "machines, so measure on the one that matters.")
+    ap.add_argument("--profile", action="store_true",
+                    help="print where each frame's time goes, so a slow "
+                         "display can be told apart from slow drawing")
+    ap.add_argument("--show-fps", action="store_true",
+                    help="draw the measured rate, to see what the Pi is "
+                         "actually managing")
     ap.add_argument("--shot", type=str, default=None,
                     help="speed:km, render one frame and exit")
     args = ap.parse_args()
@@ -608,22 +694,55 @@ def main() -> int:
         return pygame.font.Font(None, sz)
 
     bg = build_background()
-    mask = panel_mask()
-    scanlay = pygame.Surface((W, H), pygame.SRCALPHA)
-    for y in range(GRID_Y, GRID_Y + GRID_H, 2):
-        pygame.draw.line(scanlay, SCAN, (0, y), (W, y))
-    dm = SegDisplay(AMBER, AMBER_D)
+    mask = gutter_rects()
+    dm = SegDisplay(AMBER, AMBER_D, bg=STRIP_BG)
     big_font = display_font(40, 58)
     unit_font = display_font(12, 17)
     corridor = Corridor()
     sky = Skyline()
 
+    if args.profile_stages:
+        cor, sky = Corridor(), Skyline()
+        cor.advance(7.3)
+        sky.advance(7.3 * SKY_GAIN)
+        st = cc.RideState(distance_m=12345.0)
+        dm.render("12.345KM")
+        dm.render("22:37")
+        sky.draw(screen)
+
+        def bench(label, fn, n=60):
+            fn()
+            t = time.perf_counter()
+            for _ in range(n):
+                fn()
+            ms = (time.perf_counter() - t) / n * 1000
+            print(f"  {label:<22s} {ms:7.2f} ms", flush=True)
+            return ms
+
+        total = 0.0
+        total += bench("bg blit", lambda: screen.blit(bg, (0, 0)))
+        total += bench("sky.draw", lambda: sky.draw(screen))
+        total += bench("corridor.draw", lambda: cor.draw(screen))
+        total += bench("gutter fills", lambda: [screen.fill(BG, r) for r in mask])
+        total += bench("16seg x2", lambda: (
+            dm.blit(screen, "12.345KM", midleft=(6, STRIP_H // 2)),
+            dm.blit(screen, "22:37", midright=(W - 6, STRIP_H // 2))))
+        total += bench("big speed", lambda: draw_big_speed(
+            screen, big_font, unit_font, 27.3))
+        total += bench("display.flip", pygame.display.flip)
+        print(f"  {'total':<22s} {total:7.2f} ms  ->  "
+              f"{1000 / total:.1f} fps")
+        shown_n = sum(1 for _, _, z0 in sky.windows
+                      if (z0 - sky.travel) % Z_PERIOD + Z_NEAR <= Z_FAR)
+        print(f"  windows drawn: {shown_n} of {len(sky.windows)}")
+        return 0
+
     if args.shot:
         v, km = (float(x) for x in args.shot.split(":"))
         st = cc.RideState(distance_m=km * 1000.0)
         corridor.advance(7.3)
-        sky.advance(7.3)
-        draw_frame(screen, bg, mask, scanlay, dm, big_font, unit_font,
+        sky.advance(7.3 * SKY_GAIN)
+        draw_frame(screen, bg, mask, dm, big_font, unit_font,
                    corridor, sky, st, v, v)
         pygame.display.flip()
         pygame.image.save(screen, "/tmp/spinner.png")
@@ -649,9 +768,9 @@ def main() -> int:
             shown += (st.speed_kf_kmh - shown) * 0.30
             peak = max(peak, shown)
             corridor.advance(st.distance_m - last_d)
-            sky.advance(st.distance_m - last_d)
+            sky.advance((st.distance_m - last_d) * SKY_GAIN)
             last_d = st.distance_m
-            draw_frame(screen, bg, mask, scanlay, dm, big_font, unit_font,
+            draw_frame(screen, bg, mask, dm, big_font, unit_font,
                        corridor, sky, st, shown, peak)
             pygame.image.save(screen, f"frames/{i:04d}.png")
         print(f"{n} frames written to frames/ at {args.fps} fps")
@@ -668,8 +787,12 @@ def main() -> int:
     last_d = 0.0
     pending = None
     fps = pygame.time.Clock()
+    fps_font = mono(11)
     running = True
 
+    started = time.monotonic()
+    prof_draw = prof_flip = 0.0
+    prof_n = 0
     while running:
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
@@ -677,6 +800,10 @@ def main() -> int:
             elif e.type == pygame.KEYDOWN and e.key in (pygame.K_ESCAPE,
                                                         pygame.K_q):
                 running = False
+            elif e.type == pygame.MOUSEBUTTONDOWN:
+                running = False          # a tap anywhere quits
+        if args.exit_after and time.monotonic() - started > args.exit_after:
+            running = False
 
         for t_ns, level in source.poll(0.0):
             model.set_level(level)
@@ -694,13 +821,30 @@ def main() -> int:
         shown += (st.speed_kf_kmh - shown) * 0.30
         peak = max(peak, shown)
         corridor.advance(st.distance_m - last_d)
-        sky.advance(st.distance_m - last_d)
+        sky.advance((st.distance_m - last_d) * SKY_GAIN)
         last_d = st.distance_m
 
-        draw_frame(screen, bg, mask, scanlay, dm, big_font, unit_font,
+        t0 = time.perf_counter()
+        draw_frame(screen, bg, mask, dm, big_font, unit_font,
                    corridor, sky, st, shown, peak)
+        t1 = time.perf_counter()
+        if args.show_fps:
+            t = fps_font.render(f"{fps.get_fps():4.1f} fps", True,
+                                (120, 190, 240))
+            screen.blit(t, (GRID_X + 4, GRID_Y + GRID_H - 14))
         pygame.display.flip()
-        fps.tick(20)
+        t2 = time.perf_counter()
+        if args.profile:
+            prof_draw += t1 - t0
+            prof_flip += t2 - t1
+            prof_n += 1
+            if prof_n >= 40:
+                print(f"draw {prof_draw / prof_n * 1000:6.1f} ms   "
+                      f"flip {prof_flip / prof_n * 1000:6.1f} ms   "
+                      f"{fps.get_fps():4.1f} fps", flush=True)
+                prof_draw = prof_flip = 0.0
+                prof_n = 0
+        fps.tick(args.fps)
 
     source.close()
     logger.close()
