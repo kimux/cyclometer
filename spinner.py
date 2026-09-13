@@ -109,7 +109,7 @@ RING_SPACING_M = 4.0     # metres of travel per ring. Smaller = faster
 # that merely grow. Windows sit on vertical walls either side; the
 # depth of each is reduced by the distance travelled and wrapped at
 # Z_PERIOD, which is what makes the city endless without storing one.
-FOCAL = 180.0            # pixels; sets how fast things widen out
+FOCAL = 150.0            # pixels; sets how fast things widen out
 Z_NEAR =  6.0             # closer than this and a window is behind us
 Z_PERIOD = 46.0          # metres before the pattern repeats
 Z_FAR = 22.0             # beyond this a window is not drawn
@@ -119,7 +119,7 @@ WIN_W, WIN_H = 0.40, 1.00   # window size in metres
 WIN_MAX_W, WIN_MAX_H = 99, 99  # px, so a close one does not fill the panel
 WALL_MIN, WALL_MAX = 5.0, 20.0    # metres from the flight path
 SKY_GAIN = 0.3           # >1 flies through the city faster than reality
-BUILDINGS = 18
+BUILDINGS = 26
 
 
 def ring_scale(u: float) -> float:
@@ -647,6 +647,11 @@ def main() -> int:
     ap.add_argument("--fps", type=int, default=20,
                     help="frame rate, for the live display and --record "
                          "alike (default 20)")
+    ap.add_argument("--flip-test", action="store_true",
+                    help="time display.flip against how much of the "
+                         "screen changed, to see whether the panel is "
+                         "being sent the whole frame or only the parts "
+                         "that moved")
     ap.add_argument("--profile-stages", action="store_true",
                     help="time each drawing stage separately and exit. "
                          "Where the frame budget goes differs between "
@@ -700,6 +705,33 @@ def main() -> int:
     unit_font = display_font(12, 17)
     corridor = Corridor()
     sky = Skyline()
+
+    if args.flip_test:
+        import random as _r
+
+        def timed(label, prepare):
+            prepare()
+            pygame.display.flip()
+            t = time.perf_counter()
+            for _ in range(30):
+                prepare()
+                pygame.display.flip()
+            print(f"  {label:<26s} {(time.perf_counter() - t) / 30 * 1000:7.2f}"
+                  " ms", flush=True)
+
+        screen.blit(bg, (0, 0))
+        timed("nothing changes", lambda: None)
+        timed("one pixel changes",
+              lambda: screen.fill((_r.randrange(256), 0, 0), (0, 0, 1, 1)))
+        timed("top strip changes",
+              lambda: screen.fill((_r.randrange(64), 0, 0),
+                                  (0, 0, W, STRIP_H)))
+        timed("half the screen changes",
+              lambda: screen.fill((_r.randrange(64), 0, 0),
+                                  (0, 0, W, H // 2)))
+        timed("whole screen changes",
+              lambda: screen.fill((_r.randrange(64), 0, 0)))
+        return 0
 
     if args.profile_stages:
         cor, sky = Corridor(), Skyline()
