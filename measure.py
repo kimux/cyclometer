@@ -26,6 +26,7 @@ import csv
 import math
 import random
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -620,29 +621,59 @@ def clock_is_synced() -> bool:
         return False
 
 
-def next_serial(directory: Path, width: int = 4) -> int:
-    """One past the highest ride-NNNN already in the directory."""
+def short_hostname() -> str:
+    """A hostname safe to put in a filename.
+
+    Macs report things like "name.local" and the case varies, so trim
+    to the first label and normalise. Anything unexpected is replaced
+    rather than left in a path.
+    """
+    name = socket.gethostname().split(".")[0].lower()
+    safe = "".join(c if c.isalnum() or c == "-" else "-" for c in name)
+    return safe.strip("-") or "host"
+
+
+def next_serial(directory: Path, prefix: str) -> int:
+    """One past the highest serial already using this prefix.
+
+    Numbering is per host, and separately per real/simulated, on
+    purpose. Logs from the Pi and from a laptop end up in the same
+    folder sooner or later, and a shared counter would either collide
+    or skip numbers depending on which machine wrote last. Keeping the
+    series apart means each stays intact however they are merged.
+    """
     highest = 0
-    for f in directory.glob("ride-*.csv"):
-        stem = f.stem[len("ride-"):]
+    for f in directory.glob(f"{prefix}*.csv"):
+        stem = f.stem[len(prefix):]
         if stem.isdigit():
             highest = max(highest, int(stem))
     return highest + 1
 
 
 class CsvLogger:
-    def __init__(self, directory: Path) -> None:
+    """Writes the ride log.
+
+    Simulated runs are marked twice over: in the filename, so a folder
+    listing tells you what you have, and in a column, so it survives
+    being renamed or merged into something else. Mistaking a demo run
+    for real data is the kind of error that is hard to notice later.
+    """
+
+    def __init__(self, directory: Path, simulated: bool = False) -> None:
         directory.mkdir(parents=True, exist_ok=True)
-        self.serial = next_serial(directory)
+        self.host = short_hostname()
+        self.simulated = simulated
+        prefix = f"ride-{self.host}-" + ("sim-" if simulated else "")
+        self.serial = next_serial(directory, prefix)
         self.synced = clock_is_synced()
-        self.path = directory / f"ride-{self.serial:04d}.csv"
+        self.path = directory / f"{prefix}{self.serial:04d}.csv"
         self._fp = self.path.open("w", newline="", encoding="utf-8")
         self._w = csv.writer(self._fp)
         # wall_iso is only trustworthy when clock_synced is True.
         self._w.writerow(
-            ["t_ns", "wall_iso", "clock_synced", "pulse_index",
-             "interval_s", "width_s", "speed_kmh", "speed_inst_kmh",
-             "speed_kf_kmh", "accel_mps2", "distance_m"]
+            ["t_ns", "wall_iso", "clock_synced", "simulated",
+             "pulse_index", "interval_s", "width_s", "speed_kmh",
+             "speed_inst_kmh", "speed_kf_kmh", "accel_mps2", "distance_m"]
         )
         self._n = 0
 
@@ -651,6 +682,7 @@ class CsvLogger:
             t_ns,
             time.strftime("%Y-%m-%dT%H:%M:%S"),
             int(self.synced),
+            int(self.simulated),
             s.pulses,
             f"{s.interval_s:.6f}",
             f"{s.width_s:.6f}",
@@ -695,7 +727,8 @@ def main() -> int:
     source = make_source(kind, args.pin, args.magnets)
     model = RideModel(circumference_m=args.circumference,
                       magnets=args.magnets)
-    logger = None if args.no_log else CsvLogger(args.log_dir)
+    logger = (None if args.no_log else
+              CsvLogger(args.log_dir, simulated=(kind == "simulate")))
     if logger and not logger.synced:
         print("warning: clock not NTP-synced, wall-clock times are unreliable",
               file=sys.stderr)

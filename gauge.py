@@ -363,6 +363,15 @@ def main() -> int:
     ap.add_argument("--circumference", type=float, default=cc.CIRCUMFERENCE_M)
     ap.add_argument("--magnets", type=int, default=cc.MAGNETS)
     ap.add_argument("--windowed", action="store_true", help="no fullscreen")
+    ap.add_argument("--show-fps", action="store_true",
+                    help="draw the measured rate, to see what the Pi is "
+                         "actually managing")
+    ap.add_argument("--exit-after", type=float, default=None,
+                    metavar="SECONDS",
+                    help="quit on its own after this long. Worth setting "
+                         "for a demo launched from the desktop, where a "
+                         "full-screen window with no keyboard attached "
+                         "leaves nothing to close it with.")
     ap.add_argument("--fault", type=str, default=None,
                     help="draw this fault banner (preview only)")
     ap.add_argument("--clock", choices=("auto", "on", "off"), default="auto",
@@ -372,7 +381,8 @@ def main() -> int:
                     help="render this many seconds of the simulation to "
                          "PNG frames in ./frames, then exit")
     ap.add_argument("--fps", type=int, default=20,
-                    help="frame rate for --record (default 20)")
+                    help="frame rate, for the live display and --record "
+                         "alike (default 20)")
     ap.add_argument("--shot", type=str, default=None,
                     help="render one frame at this speed:km and exit, "
                          "e.g. --shot 27.3:123.45")
@@ -467,7 +477,8 @@ def main() -> int:
     source = cc.make_source(kind, args.pin)
     model = cc.RideModel(circumference_m=args.circumference,
                          magnets=args.magnets)
-    logger = cc.CsvLogger(cc.LOG_DIR)
+    logger = cc.CsvLogger(cc.LOG_DIR,
+                          simulated=(source.name == "simulated"))
 
     screen.blit(face, (0, 0))
     pygame.display.flip()
@@ -478,6 +489,8 @@ def main() -> int:
     prev_peak = pygame.Rect(0, 0, 0, 0)
     prev_km = -1.0
     fps = pygame.time.Clock()
+    fps_font = mono(11)
+    started = time.monotonic()
     pending: int | None = None
     running = True
 
@@ -553,8 +566,16 @@ def main() -> int:
             dirty.append(odo.draw(screen, km))
             prev_km = km
 
+        if args.show_fps:
+            t = fps_font.render(f"{fps.get_fps():4.1f} fps", True,
+                                (120, 190, 240))
+            r = screen.blit(face, (6, H - 18), (6, H - 18, 70, 14))
+            screen.blit(t, (6, H - 18))
+            dirty.append(r)
         pygame.display.update(dirty)
-        fps.tick(30)
+        if args.exit_after and time.monotonic() - started > args.exit_after:
+            running = False
+        fps.tick(args.fps)
 
     source.close()
     logger.close()
