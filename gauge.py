@@ -380,9 +380,12 @@ def main() -> int:
     ap.add_argument("--record", type=float, default=None, metavar="SECONDS",
                     help="render this many seconds of the simulation to "
                          "PNG frames in ./frames, then exit")
-    ap.add_argument("--fps", type=int, default=20,
+    ap.add_argument("--fps", type=int, default=30,
                     help="frame rate, for the live display and --record "
-                         "alike (default 20)")
+                         "alike. The dial redraws only the needle, so it "
+                         "can afford a higher rate than the spinner skin; "
+                         "dropping it made the partial updates visible as "
+                         "the panel scanned.")
     ap.add_argument("--shot", type=str, default=None,
                     help="render one frame at this speed:km and exit, "
                          "e.g. --shot 27.3:123.45")

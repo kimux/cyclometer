@@ -109,7 +109,7 @@ RING_SPACING_M = 4.0     # metres of travel per ring. Smaller = faster
 # that merely grow. Windows sit on vertical walls either side; the
 # depth of each is reduced by the distance travelled and wrapped at
 # Z_PERIOD, which is what makes the city endless without storing one.
-FOCAL = 180.0            # pixels; sets how fast things widen out
+FOCAL = 150.0            # pixels; sets how fast things widen out
 Z_NEAR =  6.0             # closer than this and a window is behind us
 Z_PERIOD = 46.0          # metres before the pattern repeats
 Z_FAR = 22.0             # beyond this a window is not drawn
@@ -119,7 +119,7 @@ WIN_W, WIN_H = 0.40, 1.00   # window size in metres
 WIN_MAX_W, WIN_MAX_H = 99, 99  # px, so a close one does not fill the panel
 WALL_MIN, WALL_MAX = 5.0, 20.0    # metres from the flight path
 SKY_GAIN = 0.3           # >1 flies through the city faster than reality
-BUILDINGS = 18
+BUILDINGS = 26
 
 
 def ring_scale(u: float) -> float:
@@ -813,7 +813,8 @@ def main() -> int:
     source = cc.make_source(kind, args.pin, args.magnets)
     model = cc.RideModel(circumference_m=args.circumference,
                          magnets=args.magnets)
-    logger = cc.CsvLogger(cc.LOG_DIR)
+    logger = cc.CsvLogger(cc.LOG_DIR,
+                          simulated=(source.name == "simulated"))
 
     shown = peak = 0.0
     last_d = 0.0
